@@ -1,0 +1,131 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: backend-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:clientes_db}
+      POSTGRES_USER: ${POSTGRES_USER:postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:postgres}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "${POSTGRES_PORT:5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - backend-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: backend-app
+    environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:prod}
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_NAME: ${POSTGRES_DB:clientes_db}
+      DATABASE_USERNAME: ${POSTGRES_USER:postgres}
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD:postgres}
+      DATABASE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:clientes_db}
+      SERVER_PORT: 8080
+      JAVA_OPTS: >-
+        -XX:+UseContainerSupport
+        -XX:MaxRAMPercentage=75.0
+        -Djava.security.egd=file:/dev/./urandom
+        -Dspring.profiles.active=${SPRING_PROFILES_ACTIVE:prod}
+      LOG_PATH: /app/logs
+      LOG_FILE: application
+      RESILIENCE4J_CIRCUITBREAKER_CONFIG_INSTANCENAME: default
+      RESILIENCE4J_RETRY_CONFIG_INSTANCENAME: default
+    ports:
+      - "${APP_PORT:8080}:8080"
+    volumes:
+      - app_logs:/app/logs
+    networks:
+      - backend-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1G
+        reservations:
+          cpus: '1.0'
+          memory: 512M
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: backend-prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    ports:
+      - "9090:9090"
+    networks:
+      - backend-network
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: backend-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    networks:
+      - backend-network
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+networks:
+  backend-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  postgres_data:
+    driver: local
+  app_logs:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
